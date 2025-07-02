@@ -3,7 +3,7 @@ import uuid
 import json
 import requests
 import subprocess
-from flask import Flask, request, jsonify, Response, after_this_request
+from flask import Flask, request, jsonify, send_file, after_this_request
 
 app = Flask(__name__)
 
@@ -14,7 +14,7 @@ def home():
 @app.route('/generate-video', methods=['POST'])
 def generate_video():
     try:
-        data = request.json
+        data = request.get_json(force=True)
         image_url = data.get('image_url')
         audio_url = data.get('audio_url')
         subtitle = data.get('subtitle', '')
@@ -44,7 +44,7 @@ def generate_video():
         duration = float(duration_data["format"]["duration"])
         end_time = f"0:00:{int(duration):02d}.00"
 
-        # Generate subtitle file with resolution
+        # Generate subtitle file
         with open(subtitle_path, 'w', encoding='utf-8') as f:
             f.write(f"""
 [Script Info]
@@ -61,7 +61,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:00.00,{end_time},Default,,0,0,0,,{subtitle}
 """)
 
-        # FFmpeg command
+        # Run FFmpeg
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
@@ -77,9 +77,9 @@ Dialogue: 0,0:00:00.00,{end_time},Default,,0,0,0,,{subtitle}
             "-shortest",
             output_path
         ]
-
         subprocess.run(ffmpeg_cmd, check=True)
 
+        # Clean up after request
         @after_this_request
         def cleanup(response):
             for f in [image_path, audio_path, subtitle_path, output_path]:
@@ -89,15 +89,11 @@ Dialogue: 0,0:00:00.00,{end_time},Default,,0,0,0,,{subtitle}
                     print(f"⚠️ Could not delete {f}: {e}")
             return response
 
-        def stream_video():
-            with open(output_path, 'rb') as f:
-                yield from f
-
-        return Response(stream_video(), mimetype='video/mp4')
+        # Send the generated video
+        return send_file(output_path, mimetype='video/mp4', as_attachment=False)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
