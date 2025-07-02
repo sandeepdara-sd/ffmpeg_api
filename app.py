@@ -3,18 +3,24 @@ import uuid
 import json
 import requests
 import subprocess
-from flask import Flask, request, jsonify, send_file, after_this_request
+from flask import Flask, request, jsonify, send_from_directory, after_this_request
 
 app = Flask(__name__)
+app.config['STATIC_FOLDER'] = 'static'
+os.makedirs(app.config['STATIC_FOLDER'], exist_ok=True)
 
 @app.route('/')
 def home():
     return "🎬 FFmpeg API is running on Render."
 
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    return send_from_directory(app.config['STATIC_FOLDER'], filename)
+
 @app.route('/generate-video', methods=['POST'])
 def generate_video():
     try:
-        data = request.get_json(force=True)
+        data = request.json
         image_url = data.get('image_url')
         audio_url = data.get('audio_url')
         subtitle = data.get('subtitle', '')
@@ -26,7 +32,8 @@ def generate_video():
         image_path = f"{uid}_image.jpg"
         audio_path = f"{uid}_audio.mp3"
         subtitle_path = f"{uid}.ass"
-        output_path = f"{uid}_output.mp4"
+        output_filename = f"{uid}_output.mp4"
+        output_path = os.path.join(app.config['STATIC_FOLDER'], output_filename)
 
         # Download image and audio
         with open(image_path, "wb") as f:
@@ -61,7 +68,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:00.00,{end_time},Default,,0,0,0,,{subtitle}
 """)
 
-        # Run FFmpeg
+        # FFmpeg command
         ffmpeg_cmd = [
             "ffmpeg",
             "-y",
@@ -77,23 +84,24 @@ Dialogue: 0,0:00:00.00,{end_time},Default,,0,0,0,,{subtitle}
             "-shortest",
             output_path
         ]
+
         subprocess.run(ffmpeg_cmd, check=True)
 
-        # Clean up after request
         @after_this_request
         def cleanup(response):
-            for f in [image_path, audio_path, subtitle_path, output_path]:
+            for f in [image_path, audio_path, subtitle_path]:
                 try:
                     os.remove(f)
                 except Exception as e:
                     print(f"⚠️ Could not delete {f}: {e}")
             return response
 
-        # Send the generated video
-        return send_file(output_path, mimetype='video/mp4', as_attachment=False)
+        video_url = request.host_url + f"static/{output_filename}"
+        return jsonify({"video_url": video_url}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
