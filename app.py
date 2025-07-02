@@ -17,35 +17,39 @@ def home():
 @app.route("/generate-video", methods=["POST"])
 def generate_video():
     scenes = request.json.get("scenes", [])
+    if not scenes:
+        return jsonify({"error": "Missing scenes array"}), 400
 
-    if not scenes or not isinstance(scenes, list):
-        return jsonify({"error": "Invalid or missing 'scenes' list"}), 400
+    unique_id = str(uuid.uuid4())
+    output_paths = []
 
-    segment_paths = []
+    os.makedirs(f"temp/{unique_id}", exist_ok=True)
 
-    for i, scene in enumerate(scenes):
+    concat_list_path = f"temp/{unique_id}/concat.txt"
+
+    concat_entries = []
+
+    for idx, scene in enumerate(scenes):
         image_url = scene.get("image_url")
         audio_url = scene.get("audio_url")
-        subtitle_text = scene.get("subtitle", f"Scene {i+1}")
+        subtitle_text = scene.get("subtitle", f"Scene {idx+1}")
 
         if not image_url or not audio_url:
-            return jsonify({"error": f"Missing data in scene {i+1}"}), 400
+            return jsonify({"error": f"Missing image or audio in scene {idx}"}), 400
 
-        uid = f"{uuid.uuid4()}_{i}"
-        image_path = f"{uid}_image.jpg"
-        audio_path = f"{uid}_audio.mp3"
-        subtitle_path = f"{uid}.ass"
-        output_path = f"{uid}_output.mp4"
+        # Download files
+        image_path = f"temp/{unique_id}/scene_{idx}.jpg"
+        audio_path = f"temp/{unique_id}/scene_{idx}.mp3"
+        subtitle_path = f"temp/{unique_id}/scene_{idx}.ass"
+        output_path = f"temp/{unique_id}/scene_{idx}.mp4"
 
-        # Download image
         with open(image_path, "wb") as f:
             f.write(requests.get(image_url).content)
 
-        # Download audio
         with open(audio_path, "wb") as f:
             f.write(requests.get(audio_url).content)
 
-        # Create .ass subtitle file
+        # Create subtitle
         ass_content = f"""
 [Script Info]
 ScriptType: v4.00+
@@ -58,12 +62,12 @@ Style: Default,Arial,50,&H00FFFFFF,&H00000000,-1,0,2,10,10,50,1,2,0,0
 
 [Events]
 Format: Layer, Start, End, Style, Text
-Dialogue: 0,0:00:00.00,0:00:10.00,Default,{subtitle_text}
+Dialogue: 0,0:00:00.00,0:00:07.00,Default,{subtitle_text}
 """
         with open(subtitle_path, "w") as f:
             f.write(ass_content.strip())
 
-        # Create individual video segment
+        # Create individual scene video
         cmd = [
             "ffmpeg",
             "-loop", "1",
@@ -73,52 +77,41 @@ Dialogue: 0,0:00:00.00,0:00:10.00,Default,{subtitle_text}
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "stillimage",
+            "-t", "7",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", "128k",
             "-shortest",
-            "-y",
             output_path
         ]
+        subprocess.run(cmd, check=True)
+        output_paths.append(output_path)
+        concat_entries.append(f"file '{output_path}'")
 
-        try:
-            subprocess.run(cmd, check=True)
-            segment_paths.append(output_path)
-        except subprocess.CalledProcessError as e:
-            return jsonify({"error": "FFmpeg failed", "scene": i + 1, "details": str(e)}), 500
-        finally:
-            for f in [image_path, audio_path, subtitle_path]:
-                if os.path.exists(f):
-                    os.remove(f)
-
-    # Merge all segments into one video using concat
-    concat_list_path = "concat_list.txt"
+    # Write concat file
     with open(concat_list_path, "w") as f:
-        for path in segment_paths:
-            f.write(f"file '{path}'\n")
+        f.write("\n".join(concat_entries))
 
-    final_output = f"static/{uuid.uuid4()}_final.mp4"
-    cmd_concat = [
+    # Final output path
+    final_path = f"static/{unique_id}_final_reel.mp4"
+
+    # Concatenate all scenes
+    concat_cmd = [
         "ffmpeg",
         "-f", "concat",
         "-safe", "0",
         "-i", concat_list_path,
         "-c", "copy",
-        "-y",
-        final_output
+        final_path
     ]
+    subprocess.run(concat_cmd, check=True)
 
-    try:
-        subprocess.run(cmd_concat, check=True)
-    except subprocess.CalledProcessError as e:
-        return jsonify({"error": "Merging video failed", "details": str(e)}), 500
-    finally:
-        os.remove(concat_list_path)
-        for f in segment_paths:
-            if os.path.exists(f):
-                os.remove(f)
+    # Clean temp files
+    subprocess.run(["rm", "-rf", f"temp/{unique_id}"])
 
-    return jsonify({"video_url": f"/{final_output}"})
+    video_url = f"/static/{os.path.basename(final_path)}"
+    return jsonify({"video_url": video_url})
+
 
 
 if __name__ == "__main__":
