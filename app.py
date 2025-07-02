@@ -1,9 +1,9 @@
 import os
 import uuid
+import json
 import requests
 import subprocess
-from flask import Flask, request, jsonify, send_file
-from flask import after_this_request
+from flask import Flask, request, jsonify, Response, after_this_request
 
 app = Flask(__name__)
 
@@ -15,75 +15,90 @@ def home():
 def generate_video():
     try:
         data = request.json
-        image_url = data['image_url']
-        audio_url = data['audio_url']
-        subtitle = data['subtitle']
+        image_url = data.get('image_url')
+        audio_url = data.get('audio_url')
+        subtitle = data.get('subtitle', '')
+
+        if not all([image_url, audio_url, subtitle]):
+            return jsonify({"error": "Missing one or more required fields"}), 400
 
         uid = str(uuid.uuid4())
-        image_path = f"{uid}_img.jpg"
+        image_path = f"{uid}_image.jpg"
         audio_path = f"{uid}_audio.mp3"
-        output_path = f"{uid}_video.mp4"
-        subtitle_file = f"{uid}_subs.ass"
+        subtitle_path = f"{uid}.ass"
+        output_path = f"{uid}_output.mp4"
 
-        # Download assets
-        with open(image_path, 'wb') as f:
+        # Download image and audio
+        with open(image_path, "wb") as f:
             f.write(requests.get(image_url).content)
-        with open(audio_path, 'wb') as f:
+        with open(audio_path, "wb") as f:
             f.write(requests.get(audio_url).content)
 
-        # Create subtitles
-        with open(subtitle_file, 'w', encoding='utf-8') as f:
+        # Get audio duration
+        probe = subprocess.run([
+            "ffprobe", "-v", "error", "-show_entries",
+            "format=duration", "-of", "json", audio_path
+        ], capture_output=True, text=True)
+
+        duration_data = json.loads(probe.stdout)
+        duration = float(duration_data["format"]["duration"])
+        end_time = f"0:00:{int(duration):02d}.00"
+
+        # Generate subtitle file with resolution
+        with open(subtitle_path, 'w', encoding='utf-8') as f:
             f.write(f"""
 [Script Info]
 ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,40,&H00FFFFFF,&H80000000,-1,0,1,2,0,2,30,30,80,1
+Style: Default,Arial,48,&H00FFFFFF,&H80000000,-1,0,1,2,0,2,30,30,80,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:05:00.00,Default,,0,0,0,,{subtitle}
+Dialogue: 0,0:00:00.00,{end_time},Default,,0,0,0,,{subtitle}
 """)
 
-        # FFmpeg video
-        cmd = [
+        # FFmpeg command
+        ffmpeg_cmd = [
             "ffmpeg",
             "-y",
             "-loop", "1",
             "-i", image_path,
             "-i", audio_path,
-            "-vf", f"ass={subtitle_file},scale=1080:1920",
-            "-shortest",
+            "-vf", f"ass={subtitle_path},scale=1080:1920",
+            "-t", str(duration),
             "-c:v", "libx264",
             "-c:a", "aac",
             "-b:a", "192k",
             "-pix_fmt", "yuv420p",
+            "-shortest",
             output_path
         ]
-        subprocess.run(cmd, check=True)
 
-        # Serve file and clean up AFTER response is done
+        subprocess.run(ffmpeg_cmd, check=True)
+
         @after_this_request
         def cleanup(response):
-            for file in [image_path, audio_path, subtitle_file, output_path]:
+            for f in [image_path, audio_path, subtitle_path, output_path]:
                 try:
-                    os.remove(file)
+                    os.remove(f)
                 except Exception as e:
-                    print(f"⚠️ Could not delete {file}: {e}")
+                    print(f"⚠️ Could not delete {f}: {e}")
             return response
 
-        return send_file(
-            output_path,
-            mimetype='video/mp4',
-            as_attachment=True,
-            download_name='reel_video.mp4',
-            conditional=False
-        )
+        def stream_video():
+            with open(output_path, 'rb') as f:
+                yield from f
+
+        return Response(stream_video(), mimetype='video/mp4')
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
