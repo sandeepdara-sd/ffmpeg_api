@@ -1,108 +1,97 @@
 import os
 import uuid
-import json
 import requests
 import subprocess
-from flask import Flask, request, jsonify, send_from_directory, after_this_request
+from flask import Flask, request, jsonify, send_from_directory
+from datetime import datetime
 
-app = Flask(__name__)
-app.config['STATIC_FOLDER'] = 'static'
-os.makedirs(app.config['STATIC_FOLDER'], exist_ok=True)
+app = Flask(__name__, static_folder="static")
 
-@app.route('/')
+# Ensure output folder exists
+os.makedirs("static", exist_ok=True)
+
+
+@app.route("/")
 def home():
     return "🎬 FFmpeg API is running on Render."
 
-@app.route('/static/<path:filename>')
-def static_files(filename):
-    return send_from_directory(app.config['STATIC_FOLDER'], filename)
 
-@app.route('/generate-video', methods=['POST'])
+@app.route("/generate-video", methods=["POST"])
 def generate_video():
-    try:
-        data = request.json
-        image_url = data.get('image_url')
-        audio_url = data.get('audio_url')
-        subtitle = data.get('subtitle', '')
+    data = request.json
+    image_url = data.get("image_url")
+    audio_url = data.get("audio_url")
+    subtitle_text = data.get("subtitle", "Hello from AI 🎉")
 
-        if not all([image_url, audio_url, subtitle]):
-            return jsonify({"error": "Missing one or more required fields"}), 400
+    if not image_url or not audio_url:
+        return jsonify({"error": "Missing image_url or audio_url"}), 400
 
-        uid = str(uuid.uuid4())
-        image_path = f"{uid}_image.jpg"
-        audio_path = f"{uid}_audio.mp3"
-        subtitle_path = f"{uid}.ass"
-        output_filename = f"{uid}_output.mp4"
-        output_path = os.path.join(app.config['STATIC_FOLDER'], output_filename)
+    # Generate unique ID
+    unique_id = str(uuid.uuid4())
+    image_path = f"{unique_id}_image.jpg"
+    audio_path = f"{unique_id}_audio.mp3"
+    subtitle_path = f"{unique_id}.ass"
+    output_path = f"static/{unique_id}_output.mp4"
 
-        # Download image and audio
-        with open(image_path, "wb") as f:
-            f.write(requests.get(image_url).content)
-        with open(audio_path, "wb") as f:
-            f.write(requests.get(audio_url).content)
+    # Download image
+    with open(image_path, "wb") as f:
+        f.write(requests.get(image_url).content)
 
-        # Get audio duration
-        probe = subprocess.run([
-            "ffprobe", "-v", "error", "-show_entries",
-            "format=duration", "-of", "json", audio_path
-        ], capture_output=True, text=True)
+    # Download audio
+    with open(audio_path, "wb") as f:
+        f.write(requests.get(audio_url).content)
 
-        duration_data = json.loads(probe.stdout)
-        duration = float(duration_data["format"]["duration"])
-        end_time = f"0:00:{int(duration):02d}.00"
-
-        # Generate subtitle file
-        with open(subtitle_path, 'w', encoding='utf-8') as f:
-            f.write(f"""
+    # Create .ass subtitle file
+    ass_content = f"""
 [Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,48,&H00FFFFFF,&H80000000,-1,0,1,2,0,2,30,30,80,1
+Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, Alignment, MarginL, MarginR, MarginV, BorderStyle, Outline, Shadow, Encoding
+Style: Default,Arial,50,&H00FFFFFF,&H00000000,-1,0,2,10,10,50,1,2,0,0
 
 [Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,{end_time},Default,,0,0,0,,{subtitle}
-""")
+Format: Layer, Start, End, Style, Text
+Dialogue: 0,0:00:00.00,0:00:07.00,Default,{subtitle_text}
+"""
 
-        # FFmpeg command
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-y",
-            "-loop", "1",
-            "-i", image_path,
-            "-i", audio_path,
-            "-vf", f"ass={subtitle_path},scale=1080:1920",
-            "-t", str(duration),
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-pix_fmt", "yuv420p",
-            "-shortest",
-            output_path
-        ]
+    with open(subtitle_path, "w") as f:
+        f.write(ass_content.strip())
 
-        subprocess.run(ffmpeg_cmd, check=True)
+    # Run FFmpeg command
+    cmd = [
+        "ffmpeg",
+        "-loop", "1",
+        "-i", image_path,
+        "-i", audio_path,
+        "-vf", f"ass={subtitle_path}",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-tune", "stillimage",
+        "-t", "7",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-shortest",
+        output_path
+    ]
 
-        @after_this_request
-        def cleanup(response):
-            for f in [image_path, audio_path, subtitle_path]:
-                try:
-                    os.remove(f)
-                except Exception as e:
-                    print(f"⚠️ Could not delete {f}: {e}")
-            return response
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": "FFmpeg failed", "details": str(e)}), 500
+    finally:
+        # Clean up temp files
+        for file in [image_path, audio_path, subtitle_path]:
+            if os.path.exists(file):
+                os.remove(file)
 
-        video_url = request.host_url + f"static/{output_filename}"
-        return jsonify({"video_url": video_url}), 200
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    video_url = f"/static/{os.path.basename(output_path)}"
+    return jsonify({"video_url": video_url})
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
