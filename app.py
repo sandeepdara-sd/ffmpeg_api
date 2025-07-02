@@ -64,7 +64,7 @@ Dialogue: 0,0:00:00.00,0:05:00.00,Default,,0,0,0,,{subtitle}
         subprocess.run(cmd, check=True)
 
         # Serve file and clean up AFTER response is done
-       @after_this_request
+        @after_this_request
         def cleanup(response):
             for file in [image_path, audio_path, subtitle_file, output_path]:
                 try:
