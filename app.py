@@ -2,61 +2,47 @@ import os
 import uuid
 import requests
 import subprocess
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from datetime import datetime
-import threading
 
 app = Flask(__name__, static_folder="static")
 
 # Ensure output folder exists
 os.makedirs("static", exist_ok=True)
 
+
 @app.route("/")
 def home():
     return "🎬 FFmpeg API is running on Render."
 
+
 @app.route("/generate-video", methods=["POST"])
 def generate_video():
-    scenes = request.json.get("scenes", [])
-    if not scenes:
-        return jsonify({"error": "Missing scenes array"}), 400
+    data = request.json
+    image_url = data.get("image_url")
+    audio_url = data.get("audio_url")
+    subtitle_text = data.get("subtitle", "Hello from AI 🎉")
 
+    if not image_url or not audio_url:
+        return jsonify({"error": "Missing image_url or audio_url"}), 400
+
+    # Generate unique ID
     unique_id = str(uuid.uuid4())
-    threading.Thread(target=process_scenes, args=(scenes, unique_id)).start()
+    image_path = f"{unique_id}_image.jpg"
+    audio_path = f"{unique_id}_audio.mp3"
+    subtitle_path = f"{unique_id}.ass"
+    output_path = f"static/{unique_id}_output.mp4"
 
-    return jsonify({
-        "message": "🎬 Video generation started",
-        "video_url": f"/static/{unique_id}_final_reel.mp4",
-        "status": "processing"
-    })
+    # Download image
+    with open(image_path, "wb") as f:
+        f.write(requests.get(image_url).content)
 
+    # Download audio
+    with open(audio_path, "wb") as f:
+        f.write(requests.get(audio_url).content)
 
-def process_scenes(scenes, unique_id):
-    try:
-        os.makedirs(f"temp/{unique_id}", exist_ok=True)
-        concat_entries = []
-
-        for idx, scene in enumerate(scenes):
-            image_url = scene.get("image_url")
-            audio_url = scene.get("audio_url")
-            subtitle_text = scene.get("subtitle", f"Scene {idx+1}")
-
-            if not image_url or not audio_url:
-                continue
-
-            image_path = f"temp/{unique_id}/scene_{idx}.jpg"
-            audio_path = f"temp/{unique_id}/scene_{idx}.mp3"
-            subtitle_path = f"temp/{unique_id}/scene_{idx}.ass"
-            output_path = f"temp/{unique_id}/scene_{idx}.mp4"
-
-            # Download image/audio
-            with open(image_path, "wb") as f:
-                f.write(requests.get(image_url).content)
-            with open(audio_path, "wb") as f:
-                f.write(requests.get(audio_url).content)
-
-            # Create subtitle
-            ass_content = f"""
+    # Create .ass subtitle file
+    ass_content = f"""
 [Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -70,54 +56,42 @@ Style: Default,Arial,50,&H00FFFFFF,&H00000000,-1,0,2,10,10,50,1,2,0,0
 Format: Layer, Start, End, Style, Text
 Dialogue: 0,0:00:00.00,0:00:07.00,Default,{subtitle_text}
 """
-            with open(subtitle_path, "w") as f:
-                f.write(ass_content.strip())
 
-            # FFmpeg command
-            cmd = [
-                "ffmpeg",
-                "-loop", "1",
-                "-i", image_path,
-                "-i", audio_path,
-                "-vf", f"scale=1080:1920,ass={subtitle_path}",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "stillimage",
-                "-t", "7",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-shortest",
-                output_path
-            ]
-            subprocess.run(cmd, check=True)
-            concat_entries.append(f"file '{output_path}'")
+    with open(subtitle_path, "w") as f:
+        f.write(ass_content.strip())
 
-        # Concatenate videos
-        concat_file = f"temp/{unique_id}/concat.txt"
-        with open(concat_file, "w") as f:
-            f.write("\n".join(concat_entries))
+    # Run FFmpeg command
+    cmd = [
+        "ffmpeg",
+        "-loop", "1",
+        "-i", image_path,
+        "-i", audio_path,
+        "-vf", f"scale=trunc(iw/2)*2:trunc(ih/2)*2,ass={subtitle_path}",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-tune", "stillimage",
+        "-t", "7",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-shortest",
+        output_path
+    ]
 
-        final_path = f"static/{unique_id}_final_reel.mp4"
-        concat_cmd = [
-            "ffmpeg", "-f", "concat", "-safe", "0", "-i",
-            concat_file, "-c", "copy", final_path
-        ]
-        subprocess.run(concat_cmd, check=True)
 
-        # Cleanup
-        subprocess.run(["rm", "-rf", f"temp/{unique_id}"])
 
-    except Exception as e:
-        print(f"Error during background video generation: {e}")
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": "FFmpeg failed", "details": str(e)}), 500
+    finally:
+        # Clean up temp files
+        for file in [image_path, audio_path, subtitle_path]:
+            if os.path.exists(file):
+                os.remove(file)
 
-@app.route("/static/<path:filename>")
-def serve_static(filename):
-    return send_from_directory("static", filename)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    video_url = f"/static/{os.path.basename(output_path)}"
+    return jsonify({"video_url": video_url})
 
 
 if __name__ == "__main__":
