@@ -1,6 +1,12 @@
 services:
   - type: web
-    name: ffmpeg-api
-    env: docker
-    dockerfilePath: ./Dockerfile
+    name: ffmpeg-reels-generator
+    env: python
     plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -b 0.0.0.0:5000 app:app --timeout 120
+    envVars:
+      - key: PORT
+        value: 5000
+    staticPublishPath: static
+
