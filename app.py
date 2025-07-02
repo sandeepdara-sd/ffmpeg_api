@@ -3,6 +3,7 @@ import uuid
 import requests
 import subprocess
 from flask import Flask, request, jsonify, send_file
+from flask import after_this_request
 
 app = Flask(__name__)
 
@@ -63,16 +64,22 @@ Dialogue: 0,0:00:00.00,0:05:00.00,Default,,0,0,0,,{subtitle}
         subprocess.run(cmd, check=True)
 
         # Serve file and clean up AFTER response is done
-        def generate():
-            with open(output_path, 'rb') as f:
-                yield from f
+       @after_this_request
+        def cleanup(response):
             for file in [image_path, audio_path, subtitle_file, output_path]:
                 try:
                     os.remove(file)
                 except Exception as e:
                     print(f"⚠️ Could not delete {file}: {e}")
+            return response
 
-        return app.response_class(generate(), mimetype='video/mp4')
+        return send_file(
+            output_path,
+            mimetype='video/mp4',
+            as_attachment=True,
+            download_name='reel_video.mp4',
+            conditional=False
+        )
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
