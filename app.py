@@ -66,17 +66,18 @@ Dialogue: 0,0:00:00.00,0:00:07.00,Default,{subtitle_text}
         "-loop", "1",
         "-i", image_path,
         "-i", audio_path,
-        "-vf", f"ass={subtitle_path}",
+        "-vf", f"scale=trunc(iw/2)*2:trunc(ih/2)*2,ass={subtitle_path}",
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "stillimage",
-        "-t", "7",
+        "-t", duration,
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-b:a", "128k",
         "-shortest",
         output_path
     ]
+
 
     try:
         subprocess.run(cmd, check=True)
