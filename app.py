@@ -111,6 +111,13 @@ Dialogue: 0,0:00:00.00,0:00:07.00,Default,{subtitle_text}
     except Exception as e:
         print(f"Error during background video generation: {e}")
 
+@app.route("/static/<path:filename>")
+def serve_static(filename):
+    return send_from_directory("static", filename)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
