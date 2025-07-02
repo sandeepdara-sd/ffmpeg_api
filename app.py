@@ -70,13 +70,14 @@ Dialogue: 0,0:00:00.00,0:00:07.00,Default,{subtitle_text}
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-tune", "stillimage",
-        "-t", duration,
+        "-t", "7",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-b:a", "128k",
         "-shortest",
         output_path
     ]
+
 
 
     try:
