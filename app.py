@@ -18,7 +18,14 @@ def home():
 @app.route("/merge-videos", methods=["POST"])
 def merge_videos():
     data = request.json
-    video_urls = data.get("video_urls")
+    
+
+    # Handle case where input is directly a list
+    if isinstance(data, list):
+        video_urls = [item["video_url"] for item in data]
+    else:
+        video_urls = data.get("video_urls")
+
 
     if not video_urls or not isinstance(video_urls, list) or len(video_urls) < 2:
         return jsonify({"error": "Provide at least two video URLs in a list under 'video_urls'"}), 400
