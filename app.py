@@ -18,59 +18,57 @@ def home():
 @app.route("/merge-videos", methods=["POST"])
 def merge_videos():
     data = request.json
-    
 
-    # Handle case where input is directly a list
+    # Support both formats: dict or list
     if isinstance(data, list):
         video_urls = [item["video_url"] for item in data]
     else:
         video_urls = data.get("video_urls")
 
+    if not video_urls or not isinstance(video_urls, list):
+        return jsonify({"error": "Missing or invalid video_urls"}), 400
 
-    if not video_urls or not isinstance(video_urls, list) or len(video_urls) < 2:
-        return jsonify({"error": "Provide at least two video URLs in a list under 'video_urls'"}), 400
-
-    # Generate unique ID for merged video
+    temp_files = []
+    list_file_path = "videos_to_merge.txt"
     unique_id = str(uuid.uuid4())
     output_path = f"static/{unique_id}_merged.mp4"
 
-    # Download all videos and prepare a file list
-    temp_video_paths = []
-    list_file_path = f"{unique_id}_list.txt"
-    with open(list_file_path, "w") as list_file:
-        for i, url in enumerate(video_urls):
-            video_name = f"{unique_id}_part{i}.mp4"
-            video_path = os.path.join("static", video_name)
-            try:
-                with open(video_path, "wb") as f:
-                    f.write(requests.get(url).content)
-            except Exception as e:
-                return jsonify({"error": f"Failed to download video: {url}", "details": str(e)}), 500
-            temp_video_paths.append(video_path)
-            list_file.write(f"file '{video_path}'\n")
-
-    # FFmpeg command to merge using concat demuxer
-    cmd = [
-        "ffmpeg",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", list_file_path,
-        "-c", "copy",
-        output_path
-    ]
-
     try:
+        # Download videos
+        with open(list_file_path, "w") as f:
+            for i, url in enumerate(video_urls):
+                file_name = f"temp_{i}.mp4"
+                r = requests.get(url)
+                if r.status_code != 200:
+                    return jsonify({"error": f"Failed to download {url}"}), 400
+
+                with open(file_name, "wb") as out:
+                    out.write(r.content)
+
+                temp_files.append(file_name)
+                f.write(f"file '{file_name}'\n")
+
+        # Merge with ffmpeg
+        cmd = [
+            "ffmpeg",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", list_file_path,
+            "-c", "copy",
+            output_path
+        ]
         subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        return jsonify({"error": "FFmpeg merge failed", "details": str(e)}), 500
+
+    except Exception as e:
+        return jsonify({"error": "Video merging failed", "details": str(e)}), 500
     finally:
         # Cleanup temp files
-        for file in temp_video_paths + [list_file_path]:
+        for file in temp_files + [list_file_path]:
             if os.path.exists(file):
                 os.remove(file)
 
-    video_url = f"/static/{os.path.basename(output_path)}"
-    return jsonify({"merged_video_url": video_url})
+    return jsonify({"video_url": f"/static/{os.path.basename(output_path)}"})
+
 
 
 
