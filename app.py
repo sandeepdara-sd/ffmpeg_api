@@ -38,7 +38,12 @@ def merge_videos():
         with open(list_file_path, "w") as f:
             for i, url in enumerate(video_urls):
                 file_name = f"temp_{i}.mp4"
-                r = requests.get(url)
+                with requests.get(url, stream=True, timeout=20) as r:
+                    r.raise_for_status()
+                    with open(file_name, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            f.write(chunk)
+
                 if r.status_code != 200:
                     return jsonify({"error": f"Failed to download {url}"}), 400
 
