@@ -15,6 +15,57 @@ os.makedirs("static", exist_ok=True)
 def home():
     return "🎬 FFmpeg API is running on Render."
 
+@app.route("/merge-videos", methods=["POST"])
+def merge_videos():
+    data = request.json
+    video_urls = data.get("video_urls")
+
+    if not video_urls or not isinstance(video_urls, list) or len(video_urls) < 2:
+        return jsonify({"error": "Provide at least two video URLs in a list under 'video_urls'"}), 400
+
+    # Generate unique ID for merged video
+    unique_id = str(uuid.uuid4())
+    output_path = f"static/{unique_id}_merged.mp4"
+
+    # Download all videos and prepare a file list
+    temp_video_paths = []
+    list_file_path = f"{unique_id}_list.txt"
+    with open(list_file_path, "w") as list_file:
+        for i, url in enumerate(video_urls):
+            video_name = f"{unique_id}_part{i}.mp4"
+            video_path = os.path.join("static", video_name)
+            try:
+                with open(video_path, "wb") as f:
+                    f.write(requests.get(url).content)
+            except Exception as e:
+                return jsonify({"error": f"Failed to download video: {url}", "details": str(e)}), 500
+            temp_video_paths.append(video_path)
+            list_file.write(f"file '{video_path}'\n")
+
+    # FFmpeg command to merge using concat demuxer
+    cmd = [
+        "ffmpeg",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", list_file_path,
+        "-c", "copy",
+        output_path
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": "FFmpeg merge failed", "details": str(e)}), 500
+    finally:
+        # Cleanup temp files
+        for file in temp_video_paths + [list_file_path]:
+            if os.path.exists(file):
+                os.remove(file)
+
+    video_url = f"/static/{os.path.basename(output_path)}"
+    return jsonify({"merged_video_url": video_url})
+
+
 
 @app.route("/generate-video", methods=["POST"])
 def generate_video():
