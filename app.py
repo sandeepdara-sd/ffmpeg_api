@@ -19,7 +19,7 @@ def home():
 def merge_videos():
     data = request.json
 
-    # Support both formats: dict or list
+    # Support both formats: list of dicts or dict with 'video_urls'
     if isinstance(data, list):
         video_urls = [item["video_url"] for item in data]
     else:
@@ -34,26 +34,24 @@ def merge_videos():
     output_path = f"static/{unique_id}_merged.mp4"
 
     try:
-        # Download videos
-        with open(list_file_path, "w") as f:
+        with open(list_file_path, "w") as f_list:
             for i, url in enumerate(video_urls):
                 file_name = f"temp_{i}.mp4"
-                with requests.get(url, stream=True, timeout=20) as r:
-                    r.raise_for_status()
-                    with open(file_name, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            f.write(chunk)
+                print(f"Downloading: {url}")
 
-                if r.status_code != 200:
-                    return jsonify({"error": f"Failed to download {url}"}), 400
-
-                with open(file_name, "wb") as out:
-                    out.write(r.content)
+                try:
+                    with requests.get(url, stream=True, timeout=60) as r:
+                        r.raise_for_status()
+                        with open(file_name, "wb") as f_video:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f_video.write(chunk)
+                except Exception as e:
+                    return jsonify({"error": f"Failed to download {url}", "details": str(e)}), 500
 
                 temp_files.append(file_name)
-                f.write(f"file '{file_name}'\n")
+                f_list.write(f"file '{file_name}'\n")
 
-        # Merge with ffmpeg
+        # Merge videos using ffmpeg
         cmd = [
             "ffmpeg",
             "-f", "concat",
@@ -64,15 +62,18 @@ def merge_videos():
         ]
         subprocess.run(cmd, check=True)
 
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": "FFmpeg failed", "details": str(e)}), 500
     except Exception as e:
-        return jsonify({"error": "Video merging failed", "details": str(e)}), 500
+        return jsonify({"error": "Unexpected error", "details": str(e)}), 500
     finally:
-        # Cleanup temp files
+        # Cleanup
         for file in temp_files + [list_file_path]:
             if os.path.exists(file):
                 os.remove(file)
 
     return jsonify({"video_url": f"/static/{os.path.basename(output_path)}"})
+
 
 
 
